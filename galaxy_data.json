@@ -1,0 +1,112 @@
+{
+    "data": [
+        {
+            "galaxy": "844",
+            "img": "imgs/844.png",
+            "spectrum": "specs/844.json",
+            "type": "elliptical"
+        },
+        {
+            "galaxy": "290897",
+            "img": "imgs/290897.png",
+            "spectrum": "specs/290897.json",
+            "type": "elliptical"
+        },
+        {
+            "galaxy": "287823",
+            "img": "imgs/287823.png",
+            "spectrum": "specs/287823.json",
+            "type": "elliptical"
+        },
+        {
+            "galaxy": "99129",
+            "img": "imgs/99129.png",
+            "spectrum": "specs/99129.json",
+            "type": "spiral"
+        },
+        {
+            "galaxy": "293446",
+            "img": "imgs/293446.png",
+            "spectrum": "specs/293446.json",
+            "type": "spiral"
+        },
+        {
+            "galaxy": "294943",
+            "img": "imgs/294943.png",
+            "spectrum": "specs/294943.json",
+            "type": "spiral"
+        },
+        {
+            "galaxy": "290248",
+            "img": "imgs/290248.png",
+            "spectrum": "specs/290248.json",
+            "type": "edge_on"
+        },
+        {
+            "galaxy": "291065",
+            "img": "imgs/291065.png",
+            "spectrum": "specs/291065.json",
+            "type": "edge_on"
+        },
+        {
+            "galaxy": "295140",
+            "img": "imgs/295140.png",
+            "spectrum": "specs/295140.json",
+            "type": "edge_on"
+        },
+        {
+            "galaxy": "290722",
+            "img": "imgs/290722.png",
+            "spectrum": "specs/290722.json",
+            "type": "barred"
+        },
+        {
+            "galaxy": "288813",
+            "img": "imgs/288813.png",
+            "spectrum": "specs/288813.json",
+            "type": "barred"
+        },
+        {
+            "galaxy": "294348",
+            "img": "imgs/294348.png",
+            "spectrum": "specs/294348.json",
+            "type": "barred"
+        },
+        {
+            "galaxy": "290026",
+            "img": "imgs/290026.png",
+            "spectrum": "specs/290026.json",
+            "type": "interacting"
+        },
+        {
+            "galaxy": "289500",
+            "img": "imgs/289500.png",
+            "spectrum": "specs/289500.json",
+            "type": "interacting"
+        },
+        {
+            "galaxy": "288109",
+            "img": "imgs/288109.png",
+            "spectrum": "specs/288109.json",
+            "type": "interacting"
+        },
+        {
+            "galaxy": "258142",
+            "img": "imgs/258142.png",
+            "spectrum": "specs/258142.json",
+            "type": "artefact"
+        },
+        {
+            "galaxy": "169394",
+            "img": "imgs/169394.png",
+            "spectrum": "specs/169394.json",
+            "type": "artefact"
+        },
+        {
+            "galaxy": "261434",
+            "img": "imgs/261434.png",
+            "spectrum": "specs/261434.json",
+            "type": "artefact"
+        }
+    ]
+}

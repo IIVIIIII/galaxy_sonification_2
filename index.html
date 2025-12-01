@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Galaxy Morphing Game — 4 Types</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: #000;
+    color: #fff;
+    font-family: system-ui, sans-serif;
+    overflow: hidden;
+  }
+
+  #main {
+    position: relative;
+    width: 100%;
+    height: 100%;
+  }
+
+  /* Crosshair Lines */
+  #vLine, #hLine {
+    position: absolute;
+    background: #fff;
+    pointer-events: none;
+  }
+  #vLine {
+    width: 2px;
+    height: 100%;
+    left: 50%;
+    top: 0;
+    transform: translateX(-1px);
+  }
+  #hLine {
+    height: 2px;
+    width: 100%;
+    top: 50%;
+    left: 0;
+    transform: translateY(-1px);
+  }
+
+  /* Quadrant Labels */
+  .quadLabel {
+    position: absolute;
+    font-size: 24px;
+    pointer-events: none;
+  }
+  #labelTL { top: 40px; left: 40px; }
+  #labelTR { top: 40px; right: 40px; }
+  #labelBL { bottom: 40px; left: 40px; }
+  #labelBR { bottom: 40px; right: 40px; }
+
+  /* Galaxy Image */
+  #galaxyImg {
+    position: absolute;
+    max-width: 200px;
+    max-height: 200px;
+    cursor: pointer;
+    user-select: none;
+  }
+
+  /* Status + Next Button */
+  #status {
+    position: absolute;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    text-align: center;
+    font-size: 16px;
+    pointer-events: none;
+  }
+
+  #nextBtn {
+    position: absolute;
+    bottom: 70px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 8px 16px;
+    font-size: 14px;
+    border-radius: 4px;
+    border: none;
+    background: #444;
+    color: #fff;
+    cursor: pointer;
+    display: none;
+  }
+</style>
+</head>
+<body>
+
+<div id="main">
+  <div id="vLine"></div>
+  <div id="hLine"></div>
+
+  <div id="labelTL" class="quadLabel">Type 1</div>
+  <div id="labelTR" class="quadLabel">Type 2</div>
+  <div id="labelBL" class="quadLabel">Type 3</div>
+  <div id="labelBR" class="quadLabel">Type 4</div>
+
+  <img id="galaxyImg" src="" alt="Galaxy">
+
+  <div id="status">Loading galaxies…</div>
+  <button id="nextBtn">Next Round</button>
+</div>
+
+<script type="module">
+
+/* ===========================================================
+   GLOBAL STATE
+=========================================================== */
+
+let galaxiesMeta = null;
+
+let galA, galB, galC, galD;   // four galaxies (one per quadrant)
+let currentGalaxy = null;     // the one shown
+let currentType = null;       // "A" | "B" | "C" | "D"
+
+let audioCtx = null;
+let workletNode = null;
+let gainNode = null;
+
+let isFollowing = false;
+let roundActive = false;
+
+const galaxyImg = document.getElementById("galaxyImg");
+const statusEl  = document.getElementById("status");
+const nextBtn   = document.getElementById("nextBtn");
+
+/* ===========================================================
+   LOAD GALAXY METADATA
+=========================================================== */
+
+async function loadGalaxyData() {
+  const res = await fetch("galaxy_data.json");
+  galaxiesMeta = (await res.json()).data;
+}
+
+/* ===========================================================
+   PICK 4 DIFFERENT TYPES
+=========================================================== */
+
+function pickFourGalaxies() {
+  const byType = {};
+
+  galaxiesMeta.forEach(g => {
+    if (!byType[g.type]) byType[g.type] = [];
+    byType[g.type].push(g);
+  });
+
+  const types = Object.keys(byType);
+  if (types.length < 4) throw new Error("Need at least 4 galaxy types.");
+
+  const chosen = [];
+  while (chosen.length < 4) {
+    let t = types[Math.floor(Math.random() * types.length)];
+    if (!chosen.includes(t)) chosen.push(t);
+  }
+
+  galA = byType[chosen[0]][Math.floor(Math.random() * byType[chosen[0]].length)];
+  galB = byType[chosen[1]][Math.floor(Math.random() * byType[chosen[1]].length)];
+  galC = byType[chosen[2]][Math.floor(Math.random() * byType[chosen[2]].length)];
+  galD = byType[chosen[3]][Math.floor(Math.random() * byType[chosen[3]].length)];
+
+  console.log("Quadrants:", galA.type, galB.type, galC.type, galD.type);
+}
+
+/* ===========================================================
+   LOAD 4 SPECTRA
+=========================================================== */
+
+async function loadSpectraForRound() {
+  const [specA, specB, specC, specD] = await Promise.all([
+    fetch(galA.spectrum).then(r => r.json()),
+    fetch(galB.spectrum).then(r => r.json()),
+    fetch(galC.spectrum).then(r => r.json()),
+    fetch(galD.spectrum).then(r => r.json())
+  ]);
+  return {specA, specB, specC, specD};
+}
+
+/* ===========================================================
+   ENSURE AUDIO WORKLET
+=========================================================== */
+
+async function ensureAudioContext() {
+  if (audioCtx) return;
+
+  audioCtx = new AudioContext();
+
+  /* ---------------- CREATE WORKLET INLINE ---------------- */
+
+  const workletSource = `
+    function tri(x) {
+      return (2 / Math.PI) * Math.asin(Math.sin(x));
+    }
+
+    class Morph4Way extends AudioWorkletProcessor {
+      static get parameterDescriptors() {
+        return [
+          { name:"morphX", defaultValue:0.5, minValue:0, maxValue:1, automationRate:"k-rate" },
+          { name:"morphY", defaultValue:0.5, minValue:0, maxValue:1, automationRate:"k-rate" }
+        ];
+      }
+
+      constructor() {
+        super();
+        this.framesA = this.framesB = this.framesC = this.framesD = null;
+        this.times = null;
+        this.numFrames = 0;
+        this.numVoices = 0;
+
+        this.freqsA = this.freqsB = this.freqsC = this.freqsD = null;
+        this.ampsA  = this.ampsB  = this.ampsC  = this.ampsD  = null;
+
+        this.phases = null;
+        this.sr = sampleRate;
+
+        this.loopDur = 0;
+        this.timeInLoop = 0;
+        this.currentFrameIndex = 0;
+
+        this.spread = 0.5;
+        this.globalScale = 1.0;
+
+        this.port.onmessage = e => {
+          const msg = e.data;
+          if (msg.type === "setFrames4") this.setup(msg.A, msg.B, msg.C, msg.D);
+          else if (msg.type === "reset") this.resetState();
+        };
+      }
+
+      /* ---------- Setup looping spectral frames ----------- */
+      setup(fA, fB, fC, fD) {
+        if (!fA || !fB || !fC || !fD) return;
+
+        let A = fA.slice().sort((a,b)=>(a.time||0)-(b.time||0));
+        let B = fB.slice().sort((a,b)=>(a.time||0)-(b.time||0));
+        let C = fC.slice().sort((a,b)=>(a.time||0)-(b.time||0));
+        let D = fD.slice().sort((a,b)=>(a.time||0)-(b.time||0));
+
+        const n = Math.min(A.length, B.length, C.length, D.length);
+        if (n===0) return;
+
+        A=A.slice(0,n); B=B.slice(0,n); C=C.slice(0,n); D=D.slice(0,n);
+
+        const t0=A[0].time||0;
+        const tLast=A[n-1].time||0;
+        const dt=(n>1 && tLast>t0)?((tLast-t0)/(n-1)):0.01;
+
+        const framesA=[], framesB=[], framesC=[], framesD=[];
+        for (let i=0;i<n;i++){
+          framesA.push({time:(A[i].time||0)-t0, spectrum:A[i].spectrum||[]});
+          framesB.push({time:(B[i].time||0)-t0, spectrum:B[i].spectrum||[]});
+          framesC.push({time:(C[i].time||0)-t0, spectrum:C[i].spectrum||[]});
+          framesD.push({time:(D[i].time||0)-t0, spectrum:D[i].spectrum||[]});
+        }
+
+        const phantom = framesA[n-1].time + dt;
+        framesA.push({time:phantom, spectrum:A[0].spectrum||[]});
+        framesB.push({time:phantom, spectrum:B[0].spectrum||[]});
+        framesC.push({time:phantom, spectrum:C[0].spectrum||[]});
+        framesD.push({time:phantom, spectrum:D[0].spectrum||[]});
+
+        this.framesA=framesA; this.framesB=framesB;
+        this.framesC=framesC; this.framesD=framesD;
+
+        this.numFrames = framesA.length;
+        this.times = new Float32Array(this.numFrames);
+        for (let i=0;i<this.numFrames;i++) this.times[i]=framesA[i].time;
+
+        this.loopDur = this.times[this.numFrames-1];
+
+        let maxV=0;
+        for (let i=0;i<this.numFrames;i++){
+          maxV=Math.max(
+            maxV,
+            framesA[i].spectrum.length,
+            framesB[i].spectrum.length,
+            framesC[i].spectrum.length,
+            framesD[i].spectrum.length
+          );
+        }
+        this.numVoices = maxV||1;
+        this.globalScale = 1.0 / Math.sqrt(this.numVoices);
+
+        this.freqsA=new Array(this.numFrames); this.ampsA=new Array(this.numFrames);
+        this.freqsB=new Array(this.numFrames); this.ampsB=new Array(this.numFrames);
+        this.freqsC=new Array(this.numFrames); this.ampsC=new Array(this.numFrames);
+        this.freqsD=new Array(this.numFrames); this.ampsD=new Array(this.numFrames);
+
+        for (let i=0;i<this.numFrames;i++){
+          const aS=framesA[i].spectrum, bS=framesB[i].spectrum;
+          const cS=framesC[i].spectrum, dS=framesD[i].spectrum;
+
+          const fA=new Float32Array(this.numVoices);
+          const fB=new Float32Array(this.numVoices);
+          const fC=new Float32Array(this.numVoices);
+          const fD=new Float32Array(this.numVoices);
+
+          const aA=new Float32Array(this.numVoices);
+          const aB=new Float32Array(this.numVoices);
+          const aC=new Float32Array(this.numVoices);
+          const aD=new Float32Array(this.numVoices);
+
+          for (let v=0;v<this.numVoices;v++){
+            if (v<aS.length){fA[v]=aS[v].freq||0; aA[v]=aS[v].amp||0;}
+            if (v<bS.length){fB[v]=bS[v].freq||0; aB[v]=bS[v].amp||0;}
+            if (v<cS.length){fC[v]=cS[v].freq||0; aC[v]=cS[v].amp||0;}
+            if (v<dS.length){fD[v]=dS[v].freq||0; aD[v]=dS[v].amp||0;}
+          }
+
+          this.freqsA[i]=fA; this.ampsA[i]=aA;
+          this.freqsB[i]=fB; this.ampsB[i]=aB;
+          this.freqsC[i]=fC; this.ampsC[i]=aC;
+          this.freqsD[i]=fD; this.ampsD[i]=aD;
+        }
+
+        this.phases=new Float32Array(this.numVoices);
+        this.resetState();
+      }
+
+      resetState() {
+        this.timeInLoop=0;
+        this.currentFrameIndex=0;
+        if (this.phases) this.phases.fill(0);
+      }
+
+      /* ---------- AUDIO PROCESSING LOOP ---------- */
+      process(inputs, outputs, parameters) {
+        if (!this.times) return true;
+
+        const outL=outputs[0][0];
+        const outR=outputs[0][1]||outL;
+        const N=outL.length;
+
+        const mxP=parameters.morphX;
+        const myP=parameters.morphY;
+
+        const mx0=(mxP.length===1)?mxP[0]:0;
+        const my0=(myP.length===1)?myP[0]:0;
+
+        for (let i=0;i<N;i++){
+          const mX=(mxP.length===1)?mx0:mxP[i];
+          const mY=(myP.length===1)?my0:myP[i];
+
+          const t=this.timeInLoop % this.loopDur;
+
+          // Find correct frame index from scratch each render block
+          let idx0 = 0;
+          while (idx0 < this.numFrames - 1 && t >= this.times[idx0 + 1]) {
+              idx0++;
+          }
+          const idx1 = Math.min(idx0 + 1, this.numFrames - 1);
+
+
+          const t0=this.times[idx0], t1=this.times[idx1];
+          let a=(t1>t0)?((t-t0)/(t1-t0)):0;
+          a=Math.max(0,Math.min(a,1));
+
+          const fA0=this.freqsA[idx0], fA1=this.freqsA[idx1];
+          const fB0=this.freqsB[idx0], fB1=this.freqsB[idx1];
+          const fC0=this.freqsC[idx0], fC1=this.freqsC[idx1];
+          const fD0=this.freqsD[idx0], fD1=this.freqsD[idx1];
+
+          const aA0=this.ampsA[idx0], aA1=this.ampsA[idx1];
+          const aB0=this.ampsB[idx0], aB1=this.ampsB[idx1];
+          const aC0=this.ampsC[idx0], aC1=this.ampsC[idx1];
+          const aD0=this.ampsD[idx0], aD1=this.ampsD[idx1];
+
+          let L=0, R=0;
+
+          for (let v=0;v<this.numVoices;v++){
+            const fA = fA0[v] + a*(fA1[v]-fA0[v]);
+            const fB = fB0[v] + a*(fB1[v]-fB0[v]);
+            const fC = fC0[v] + a*(fC1[v]-fC0[v]);
+            const fD = fD0[v] + a*(fD1[v]-fD0[v]);
+
+            const A_A = aA0[v] + a*(aA1[v]-aA0[v]);
+            const A_B = aB0[v] + a*(aB1[v]-aB0[v]);
+            const A_C = aC0[v] + a*(aC1[v]-aC0[v]);
+            const A_D = aD0[v] + a*(aD1[v]-aD0[v]);
+
+            const fTop = fA + mX*(fB-fA);
+            const fBot = fC + mX*(fD-fC);
+            const f = fTop + mY*(fBot-fTop);
+
+            const ATop = A_A + mX*(A_B-A_A);
+            const ABot = A_C + mX*(A_D-A_C);
+            const AFin = ATop + mY*(ABot-ATop);
+
+            if (f>0 && AFin>0){
+              this.phases[v] += (2*Math.PI*f)/this.sr;
+              const y=tri(this.phases[v]);
+              const pan=((v%2===0)?-1:1)*this.spread;
+
+              L += AFin*(1-pan)*0.5 * y;
+              R += AFin*(1+pan)*0.5 * y;
+            }
+          }
+
+          outL[i]=L*this.globalScale;
+          outR[i]=R*this.globalScale;
+
+          this.timeInLoop += 1/this.sr;
+        }
+
+        return true;
+      }
+    }
+
+    registerProcessor("morph-4way", Morph4Way);
+  `;
+
+  /* Load dynamically */
+  const blob = new Blob([workletSource], {type:'application/javascript'});
+  const url = URL.createObjectURL(blob);
+  await audioCtx.audioWorklet.addModule(url);
+
+  workletNode = new AudioWorkletNode(audioCtx, "morph-4way", {
+    outputChannelCount: [2],
+    numberOfInputs: 0,
+    numberOfOutputs: 1
+  });
+
+  gainNode = audioCtx.createGain();
+  gainNode.gain.value = 0;
+  workletNode.connect(gainNode).connect(audioCtx.destination);
+}
+
+/* ===========================================================
+   SETUP ROUND
+=========================================================== */
+
+async function setupRound() {
+  statusEl.textContent = "Setting up round…";
+  nextBtn.style.display = "none";
+
+  pickFourGalaxies();
+  const {specA, specB, specC, specD} = await loadSpectraForRound();
+
+  const pick = ["A","B","C","D"][Math.floor(Math.random()*4)];
+  currentType = pick;
+  currentGalaxy = {A:galA, B:galB, C:galC, D:galD}[pick];
+
+  galaxyImg.onload = () => {
+    galaxyImg.style.left = (innerWidth/2 - galaxyImg.width/2)+"px";
+    galaxyImg.style.top  = (innerHeight/2 - galaxyImg.height/2)+"px";
+  };
+  galaxyImg.src = currentGalaxy.img;
+
+  await ensureAudioContext();
+  workletNode.port.postMessage({
+    type:"setFrames4",
+    A:specA.frames,
+    B:specB.frames,
+    C:specC.frames,
+    D:specD.frames
+  });
+  workletNode.port.postMessage({type:"reset"});
+
+  statusEl.textContent = "Click the galaxy to begin.";
+  roundActive = true;
+  isFollowing = false;
+}
+
+/* ===========================================================
+   2D MORPH UPDATE
+=========================================================== */
+
+function updateMorph(evt) {
+  if (!audioCtx || !workletNode) return;
+  const mX = Math.min(Math.max(evt.clientX / innerWidth, 0), 1);
+  const mY = Math.min(Math.max(evt.clientY / innerHeight, 0), 1);
+  workletNode.parameters.get("morphX").setValueAtTime(mX, audioCtx.currentTime);
+  workletNode.parameters.get("morphY").setValueAtTime(mY, audioCtx.currentTime);
+}
+
+/* ===========================================================
+   EVALUATE ANSWER
+=========================================================== */
+
+function evaluateAnswer(x,y) {
+  const midX = innerWidth/2;
+  const midY = innerHeight/2;
+
+  let chosen;
+  if (x < midX && y < midY) chosen = "A";
+  else if (x >= midX && y < midY) chosen = "B";
+  else if (x < midX && y >= midY) chosen = "C";
+  else chosen = "D";
+
+  const isCorrect = (chosen === currentType);
+  const realName = currentGalaxy.type;
+
+  statusEl.textContent = isCorrect
+    ? `Correct! Type: ${realName}`
+    : `Incorrect. This galaxy is a ${realName} galaxy.`;
+
+  gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime+0.6);
+  nextBtn.style.display = "block";
+  roundActive = false;
+}
+
+/* ===========================================================
+   CLICK BEHAVIOR
+=========================================================== */
+
+galaxyImg.onclick = async evt => {
+  if (!roundActive) return;
+
+  if (!audioCtx) await ensureAudioContext();
+
+  if (!isFollowing) {
+    await audioCtx.resume();
+    gainNode.gain.linearRampToValueAtTime(0.7, audioCtx.currentTime+0.4);
+    isFollowing = true;
+    updateMorph(evt);
+    statusEl.textContent = "Move galaxy into quadrant, click again to guess.";
+  } else {
+    isFollowing = false;
+    evaluateAnswer(evt.clientX, evt.clientY);
+  }
+};
+
+/* ===========================================================
+   MOUSEMOVE WHILE FOLLOWING
+=========================================================== */
+
+window.onmousemove = evt => {
+  if (!isFollowing) return;
+  galaxyImg.style.left = (evt.clientX - galaxyImg.width/2)+"px";
+  galaxyImg.style.top  = (evt.clientY - galaxyImg.height/2)+"px";
+  updateMorph(evt);
+};
+
+/* ===========================================================
+   NEXT ROUND BUTTON
+=========================================================== */
+
+nextBtn.onclick = async () => {
+  gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+  statusEl.textContent = "Loading next round…";
+  await setupRound();
+};
+
+/* ===========================================================
+   INIT
+=========================================================== */
+(async function init(){
+  await loadGalaxyData();
+  await setupRound();
+})();
+</script>
+
+</body>
+</html>
